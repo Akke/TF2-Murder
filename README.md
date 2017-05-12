@@ -1,2 +1,4 @@
 # TF2-Murder
-A fun game mode taken from Garry's Mod where all players except 1 is trying to survive the murderer, while the sheriff is trying to figure out who the murderer is and take him out before it's too late.
+If you haven't played it before, Murder is a popular gamemode for Garry's Mod where 1 player has to kill everyone to win, while another player must defend the rest of the players who are defenseless from the murderer, and kill him before it's too late. And now it's available for TF2, although due to TF2's structure it's a bit different and as this is the beta and first release of it I would appreciate if you could report bugs to me and come with ideas to improve it further.
+
+Installation instructions and more information can be found in the original AlliedModders thread: https://github.com/SirPurpleness/TF2-Murder
