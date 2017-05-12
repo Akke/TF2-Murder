@@ -1,0 +1,816 @@
+#pragma semicolon 1
+
+#include <sourcemod>
+#include <steamtools>
+#include <sdktools>
+#include <sdkhooks>
+#include <tf2_stocks>
+#include <tf2>
+#include <tf2items>
+#include <morecolors>
+#include <tf2attributes>
+#include <smlib>
+
+#pragma newdecls required
+
+#define PLUGIN_VERSION "0.2 BETA"
+#define TEAM_UNSIG 0
+#define TEAM_SPEC 1
+#define TEAM_RED 2
+#define TEAM_BLUE 3
+#define MURDER_PREFIX "\x04[Murder Mod]\x01"
+
+ConVar g_hCvarSetupTime;
+
+Handle g_Timer_Start = INVALID_HANDLE;
+ConVar g_Cvar_FriendlyFire;
+Handle g_Cvar_AutoBalance = INVALID_HANDLE;
+Handle g_Cvar_Waiting = INVALID_HANDLE;
+Handle g_Cvar_Alltalk = INVALID_HANDLE;
+Handle g_Timer_ClientWeps[MAXPLAYERS+1] = INVALID_HANDLE;
+Handle g_Timer_Waiting[MAXPLAYERS+1] = INVALID_HANDLE;
+Handle g_Hud_Timer[MAXPLAYERS+1] = INVALID_HANDLE;
+Handle g_Cvar_Spec = INVALID_HANDLE;
+Handle g_Cvar_Freeze = INVALID_HANDLE;
+Handle g_Cvar_Unbalance_Limit = INVALID_HANDLE;
+
+bool b_gIsEnabled = false;
+bool b_IsRoundActive = false;
+bool b_IsSheriff[MAXPLAYERS+1] = false;
+bool b_IsMurderer[MAXPLAYERS+1] = false;
+bool b_IsDead[MAXPLAYERS+1] = false;
+bool b_HasSentMMReq = false;
+bool b_HasSentMMReady = false;
+
+int i_CountMurderer = 0;
+int i_CountSheriff = 0;
+
+#define MAX_BUTTONS 25
+int g_LastButtons[MAXPLAYERS+1];
+
+public Plugin myinfo = 
+{
+	name = "[TF2] Murder Mod",
+	author = "SomePanns",
+	description = "Murder Mod for TF2",
+	version = PLUGIN_VERSION,
+	url = "http://steamcommunity.com/profiles/76561198082943320"
+};
+
+public void OnPluginStart()
+{
+	char gameDesc[64];
+	Format(gameDesc, sizeof(gameDesc), "Murder Mod (%s)", PLUGIN_VERSION);
+	Steam_SetGameDescription(gameDesc);
+	AddServerTag("mm");
+	
+	g_hCvarSetupTime = CreateConVar("sm_mm_setuptime", "45.0", "Amount of seconds before sheriff and murderer is chosen. Default is 45.0 seconds.");
+
+	HookEvent("teamplay_round_start", Event_RoundStartSoon);
+	HookEvent("teamplay_round_active", Event_RoundStart);
+	HookEvent("teamplay_round_win", Event_RoundWin);
+	HookEvent("teamplay_win_panel", Event_RoundWin);
+	HookEvent("teamplay_round_stalemate", Event_RoundWin);
+	HookEvent("player_spawn", Event_PlayerSpawn);
+	HookEvent("post_inventory_application", Event_PostInventory);
+	HookEvent("player_team", Event_TeamsChange); 
+	HookEvent("player_death", Event_PlayerDeath);
+	
+	AddCommandListener(Hook_CommandSay, "say");
+	AddCommandListener(Hook_Suicide, "kill");
+	AddCommandListener(Hook_Suicide, "explode");
+	
+	RegConsoleCmd("sm_mmhelp", Command_MMHelp, "Usage: sm_mmhelp");	
+}
+
+public void OnConfigsExecuted()
+{
+	g_Cvar_FriendlyFire = FindConVar("mp_friendlyfire");
+	g_Cvar_AutoBalance = FindConVar("mp_autoteambalance");
+	g_Cvar_Waiting = FindConVar("mp_waitingforplayers_time");
+	g_Cvar_Alltalk = FindConVar("sv_alltalk");
+	g_Cvar_Spec = FindConVar("mp_allowspectators");
+	g_Cvar_Freeze = FindConVar("spec_freeze_time");
+	g_Cvar_Unbalance_Limit = FindConVar("mp_teams_unbalance_limit");
+	
+	SetConVarInt(g_Cvar_Waiting, 1);
+	SetConVarInt(g_Cvar_Alltalk, 0);
+	SetConVarInt(g_Cvar_AutoBalance, 0);
+	SetConVarInt(g_Cvar_Spec, 0);
+	SetConVarInt(g_Cvar_Freeze, 10000000);
+	SetConVarInt(g_Cvar_Unbalance_Limit, 1);
+}
+
+public void OnMapStart()
+{
+	b_IsRoundActive = false;
+	b_HasSentMMReady = false;
+	b_HasSentMMReq = false;
+
+	ChangeFreeState(false);
+}
+
+public void OnMapEnd()
+{
+
+}
+
+public void OnClientPutInServer(int client)
+{
+	SDKHook(client, SDKHook_OnTakeDamage, OnTakeDamage);
+	
+	b_IsSheriff[client] = false;
+	b_IsMurderer[client] = false;
+	
+	if(b_IsRoundActive) {
+		b_IsDead[client] = true;
+	} else {
+		b_IsDead[client] = false;
+	}
+}
+
+public void OnClientDisconnect_Post(int client)
+{
+    g_LastButtons[client] = 0;
+}
+
+
+public void OnClientDisconnect(int client) {
+	b_IsDead[client] = false;
+	if(b_IsSheriff[client]) {
+		i_CountSheriff = 0;
+		PickSheriff();
+		b_IsSheriff[client] = false;
+	} else {
+		b_IsSheriff[client] = false;
+	}
+	
+	if(b_IsMurderer[client]) {
+		i_CountMurderer = 0;
+		PickMurderer();
+		b_IsMurderer[client] = false;
+	} else {
+		b_IsMurderer[client] = false;
+	}
+	
+	if(b_IsRoundActive) {
+		b_IsDead[client] = true;
+	} else {
+		b_IsDead[client] = false;
+	}
+	
+	KillTimerSafe(g_Timer_ClientWeps[client]);
+	KillTimerSafe(g_Timer_Waiting[client]);
+	KillTimerSafe(g_Hud_Timer[client]);
+}
+
+stock int TotalTeamCount()
+{
+	return (GetTeamClientCount(TEAM_RED) + GetTeamClientCount(TEAM_BLUE));
+}
+
+public Action Command_MMHelp(int client, int args)
+{
+	if(args > 0) {
+		ReplyToCommand(client, "%s Usage: sm_mmhelp", MURDER_PREFIX);
+		return Plugin_Continue;
+	} else {
+		PrintToChat(client, "%s - There is one murderer. The murderer has a knife and must kill everyone to win.", MURDER_PREFIX);
+		PrintToChat(client, "%s - There is one sheriff. The sheriff has a knife and must kill the murderer to win.", MURDER_PREFIX);
+		PrintToChat(client, "%s - Innocents must be protected by the sheriff, from the murderer. They are defenseless.", MURDER_PREFIX);
+		PrintToChat(client, "%s - When the sheriff dies, a new one is randomly picked.", MURDER_PREFIX);
+		
+		return Plugin_Continue;
+	}
+}
+
+public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float[3] vel, float[3] angles, int &weapon)
+{
+    for (int i = 0; i < MAX_BUTTONS; i++)
+    {
+        int button = (1 << i);
+        
+        if ((buttons & button))
+        {
+            if (!(g_LastButtons[client] & button))
+            {
+                OnButtonPress(client, button);
+            }
+        }
+        else if ((g_LastButtons[client] & button))
+        {
+            OnButtonRelease(client, button);
+        }
+    }
+    
+    g_LastButtons[client] = buttons;
+    
+    return Plugin_Continue;
+}
+
+stock int SetSpeed(int client, float flSpeed)
+{
+	SetEntPropFloat(client, Prop_Send, "m_flMaxspeed", flSpeed);
+}
+
+stock int ResetSpeed(int client)
+{
+	TF2_StunPlayer(client, 0.0, 0.0, TF_STUNFLAG_SLOWDOWN);
+}
+
+int OnButtonPress(int client, int button)
+{
+	if(b_IsMurderer[client] && button == IN_ATTACK2)
+	{
+		SetSpeed(client, 370.0);
+	}
+}
+
+int OnButtonRelease(int client, int button)
+{
+    if(b_IsMurderer[client] && button == IN_ATTACK2)
+	{
+		ResetSpeed(client);
+	}
+}
+
+public Action Event_RoundStartSoon(Event event, const char[] name, bool dontBroadcast) {
+	b_IsRoundActive = false;
+	
+	int iTotalTeamCount = GetTeamClientCount(TEAM_RED) + GetTeamClientCount(TEAM_BLUE);
+	if(iTotalTeamCount > 2) {
+		b_gIsEnabled = true;
+	}
+	
+	i_CountSheriff = 0;
+	i_CountMurderer = 0;
+	
+	for(int client = 1; client <= MaxClients; client++)
+	{
+		if(IsValidClient(client))
+		{
+			b_IsMurderer[client] = false;
+			b_IsSheriff[client] = false;
+		}
+	}
+}
+
+public Action OnTakeDamage(int victim, int &attacker, int &inflictor, float &damage, int &damagetype)
+{	
+	if(IsValidClient(victim) && IsValidClient(attacker)) {
+		// Kill the sheriff if he kills in innocent
+		if(b_gIsEnabled == true && b_IsRoundActive == true && GetClientTeam(attacker) == TEAM_RED && GetClientTeam(victim) == TEAM_RED) {
+			if(b_IsSheriff[attacker] == true) {
+				if(b_IsMurderer[victim] == false && b_IsSheriff[victim] == false) {
+					if(damage > 125) {
+						ForcePlayerSuicide(attacker);
+						PrintCenterTextAll("The sheriff has killed an innocent and has been slayed...");
+					}
+				}
+			}
+		}
+		
+		// Need to make sure blues cant kill each other when friendly fire is on.
+		if(b_gIsEnabled == true && b_IsRoundActive && GetClientTeam(attacker) == TEAM_BLUE && GetClientTeam(victim) == TEAM_BLUE) {
+			damage = 0.0;
+			return Plugin_Handled;
+		}
+	}
+	
+	return Plugin_Continue;
+}
+
+public int ChangeFreeState(bool state)
+{
+	int flags;
+	flags = GetConVarFlags(g_Cvar_FriendlyFire);
+	flags &= ~FCVAR_NOTIFY;
+	SetConVarFlags(g_Cvar_FriendlyFire, flags);
+
+	SetConVarBool(g_Cvar_FriendlyFire, state);
+	
+	if(state == true)
+	{
+		b_IsRoundActive = true;
+	}
+	else
+	{
+		b_IsRoundActive = false;
+	}
+}
+
+stock int ForceTeamWin(int team)
+{
+    int entity=FindEntityByClassname(-1, "team_control_point_master");
+    if(entity==-1)
+    {
+        entity=CreateEntityByName("team_control_point_master");
+        DispatchSpawn(entity);
+        AcceptEntityInput(entity, "Enable");
+    }
+    SetVariantInt(team);
+    AcceptEntityInput(entity, "SetWinner");
+}
+
+public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcast) 
+{
+	if(!b_gIsEnabled) return Plugin_Continue; // Not enough players to start round
+	
+	for(int index = 1; index <= MaxClients; index++) {
+		b_IsSheriff[index] = false;
+		b_IsMurderer[index] = false;
+		b_IsDead[index] = false;
+	}
+	
+	int visul=-1;
+	while((visul=FindEntityByClassname(visul, "func_respawnroomvisualizer"))!=-1) 
+	{
+		AcceptEntityInput(visul, "Disable");
+	}
+
+	int cp=-1;
+	while((cp=FindEntityByClassname(cp, "team_control_point"))!=-1)
+	{
+		AcceptEntityInput(cp, "Disable");
+    }
+
+	int flag=-1;
+	while((flag=FindEntityByClassname(flag, "item_teamflag"))!=-1)
+    {
+		AcceptEntityInput(flag, "Disable");
+	}
+
+	int capzone=-1;
+	while((capzone=FindEntityByClassname(capzone, "func_capturezone"))!=-1)
+	{
+		AcceptEntityInput(capzone, "Disable");
+    }
+	
+	// Disable all resupply lockers
+	int locker=-1;
+	while((locker=FindEntityByClassname(locker, "func_regenerate"))!=-1)
+	{
+		AcceptEntityInput(locker, "Disable");
+	}
+
+	int caparea=-1;
+	while((caparea=FindEntityByClassname(caparea, "trigger_capture_area"))!=-1)
+    {
+        AcceptEntityInput(caparea, "Disable");
+    }
+	
+	b_IsRoundActive = false;
+	
+	if(b_IsRoundActive == false) {
+		float SetupTime = GetConVarFloat(g_hCvarSetupTime);
+		g_Timer_Start = CreateTimer(SetupTime, Timer_StartRound);
+		PrintCenterTextAll("Round begins in %i seconds!", RoundFloat(SetupTime));
+		//b_IsRoundActive = true;
+		
+		for(int i = 1; i <= MaxClients; i++) {
+			if(IsValidClient(i) && GetClientTeam(i) == TEAM_RED) {
+				KillTimerSafe(g_Timer_ClientWeps[i]);
+				float CWTime = SetupTime + 5.0;
+				g_Timer_ClientWeps[i] = CreateTimer(CWTime, Timer_ControlWeapons, i, TIMER_REPEAT);
+				g_Hud_Timer[i] = CreateTimer(3.0, Timer_Hud, i, TIMER_REPEAT);
+			}
+		}
+	}
+
+	return Plugin_Continue;
+}
+
+public Action Timer_Hud(Handle timer, int client)
+{
+	Handle hHudRole = CreateHudSynchronizer();
+	SetHudTextParams(0.02, 0.02, 3.0, 0, 255, 0, 255);
+	if(!b_IsRoundActive)
+	{
+		ShowSyncHudText(client, hHudRole, "Round pending");
+	} 
+	else if(b_IsMurderer[client])
+	{
+		ShowSyncHudText(client, hHudRole, "Murderer (hold M2 to run)");
+	} 
+	else if(b_IsSheriff[client])
+	{
+		ShowSyncHudText(client, hHudRole, "Sheriff");
+	} 
+	else if(!b_IsSheriff[client] && !b_IsMurderer[client])
+	{
+		ShowSyncHudText(client, hHudRole, "Innocent");
+	}
+	
+	CloseHandle(hHudRole);
+}
+
+public Action Event_PostInventory(Event event, const char[] name, bool dontBroadcast) 
+{
+	int client = GetClientOfUserId(GetEventInt(event, "userid"));
+	if(!b_gIsEnabled) return Plugin_Continue; // Not enough players to start round
+	
+	if(GetClientTeam(client) == TEAM_RED && client > 0) {
+		// Only spy is allowed in murder mod
+		if(TF2_GetPlayerClass(client) != TFClass_Spy) {
+			TF2_SetPlayerClass(client, TFClass_Spy);
+		}
+		
+		TF2_RemoveAllWeapons(client);
+		SpawnWeapon(client, "tf_weapon_builder", 735, 1, 0, "");
+		
+		if(GetClientTeam(client) == TEAM_RED && b_IsRoundActive == true) {
+			if(b_IsMurderer[client]) {
+				SpawnWeapon(client, "tf_weapon_knife", 4, 1, 0, "2 ; 10.0");
+			} else if(b_IsSheriff[client]) {
+				SpawnWeapon(client, "tf_weapon_revolver", 161, 1, 0, "2 ; 10.0 ; 96 ; 4.0 ; 3 ; 0.1");
+			}
+		}
+		
+		//Client_SetHideHud(client, HIDEHUD_MISCSTATUS);
+	}
+	
+	return Plugin_Changed;
+}
+
+public Action Event_PlayerSpawn(Event event, const char[] name, bool dontBroadcast)
+{
+	int client = GetClientOfUserId(GetEventInt(event, "userid"));
+	
+	if(IsValidClient(client)) {
+		// Make sure they dont turn into civilian pose. Set sapper as active weapon for everyone.
+		int iWeapon = GetPlayerWeaponSlot(client, 1);
+		if(iWeapon > MaxClients && IsValidEntity(iWeapon))
+		SetEntPropEnt(client, Prop_Send, "m_hActiveWeapon", iWeapon);
+			
+		if(!b_IsRoundActive) {
+			int iTotalTeamCount = GetTeamClientCount(TEAM_RED) + GetTeamClientCount(TEAM_BLUE);
+			if(iTotalTeamCount > 2) {
+				if(!b_gIsEnabled) {
+					if(b_HasSentMMReady == false) {
+						PrintToChat(client, "%s 3 or more players found, starting Murder Mod.", MURDER_PREFIX);
+						b_HasSentMMReady = true;
+						KillTimerSafe(g_Timer_Waiting[client]);
+					}
+					
+					ForceTeamWin(TEAM_RED);
+					
+					b_gIsEnabled = true;
+				}
+			} else {
+				if(b_HasSentMMReq == false) {
+					g_Timer_Waiting[client] = CreateTimer(2.0, Timer_WaitingPlayers, client, TIMER_REPEAT);
+					b_HasSentMMReq = true;
+				}
+				b_gIsEnabled = false;
+			}
+		}
+		
+		// Make sure they can't play as blue
+		// if theyre dead, dont allow them to be red
+		if(b_gIsEnabled) {
+			if(GetClientTeam(client) == TEAM_BLUE && b_IsDead[client] == false) {
+				ForcePlayerSuicide(client);
+				ChangeClientTeam(client, TEAM_RED);
+			}
+			
+			if(b_IsRoundActive) {
+				if(GetClientTeam(client) == TEAM_BLUE && b_IsDead[client] == true) {
+					TF2_ChangeClientTeam(client, TFTeam_Spectator);
+				}
+			}
+		}
+	}
+	
+	return Plugin_Changed;
+}
+
+public Action Event_TeamsChange(Handle event, const char[] name, bool dontBroadcast)
+{
+	int client = GetClientOfUserId(GetEventInt(event, "userid"));
+	int team = GetEventInt(event, "team");
+	
+	if(!GetEntProp(client, Prop_Send, "m_iDesiredPlayerClass")) // Initial living spectator check. A value of 0 means that no class is selected
+    {
+        SetEntProp(client, Prop_Send, "m_iDesiredPlayerClass", TF2_GetPlayerClass(client)>=TFClass_Scout ? (view_as<TFClassType>(TF2_GetPlayerClass(client))) : TFClass_Spy); // So we assign one to prevent living spectators
+    }
+	
+	if(team == TEAM_BLUE && IsValidClient(client)) {
+		ForcePlayerSuicide(client);
+		ChangeClientTeam(client, TEAM_RED);
+	}
+	
+	return Plugin_Continue;
+}
+
+stock int GetIndexOfWeaponSlot(int iClient, int iSlot)
+{
+    return GetWeaponIndex(GetPlayerWeaponSlot(iClient, iSlot));
+}
+
+stock int GetWeaponIndex(int iWeapon)
+{
+    return IsValidEntity(iWeapon) ? GetEntProp(iWeapon, Prop_Send, "m_iItemDefinitionIndex"):-1;
+}
+
+public Action Timer_ControlWeapons(Handle timer, int client) 
+{
+	if(TotalTeamCount() < 3)
+	{
+		ForceTeamWin(TEAM_RED);
+		if(IsValidClient(client) && GetClientTeam(client) == TEAM_RED)
+		{
+			KillTimerSafe(g_Timer_ClientWeps[client]);
+		}
+	}
+	
+	if(GetClientTeam(client) == TEAM_RED && IsValidClient(client) && b_IsRoundActive == true) {
+		if(i_CountSheriff <= 0) {
+			PickSheriff();
+			ChangeFreeState(true);
+		}
+		
+		if(i_CountMurderer <= 0) {
+			PickMurderer();
+			ChangeFreeState(true);
+		}
+		
+		if(b_IsMurderer[client]) {
+			if(GetIndexOfWeaponSlot(client, TFWeaponSlot_Melee) != 4) {
+				SpawnWeapon(client, "tf_weapon_knife", 4, 1, 0, "2 ; 10.0");
+				int iWeapon = GetPlayerWeaponSlot(client, 1);
+				if(iWeapon > MaxClients && IsValidEntity(iWeapon))
+				SetEntPropEnt(client, Prop_Send, "m_hActiveWeapon", iWeapon);
+			}
+		}
+		
+		if(b_IsSheriff[client]) {
+			if(GetIndexOfWeaponSlot(client, TFWeaponSlot_Secondary) != 161) {
+				SpawnWeapon(client, "tf_weapon_revolver", 161, 1, 0, "2 ; 10.0 ; 96 ; 4.0 ; 3 ; 0.1");
+				int iWeapon = GetPlayerWeaponSlot(client, 1);
+				if(iWeapon > MaxClients && IsValidEntity(iWeapon))
+				SetEntPropEnt(client, Prop_Send, "m_hActiveWeapon", iWeapon);
+			}
+		}
+	}
+}
+
+public Action Timer_ChooseNewSheriff(Handle timer)
+{
+	PickSheriff();
+	KillTimerSafe(timer);
+}
+
+public Action Event_PlayerDeath(Handle event, const char[] name, bool dontBroadcast)
+{
+	int client = GetClientOfUserId(GetEventInt(event, "userid"));
+	int attacker = GetClientOfUserId(GetEventInt(event, "attacker"));
+	
+	if(b_gIsEnabled && IsValidClient(client)) {
+			
+		if(b_IsSheriff[client] == true) { // Sheriff has died.
+			b_IsSheriff[client] = false;
+			PrintToChatAll("%s The sheriff has been killed.", MURDER_PREFIX);
+			PrintCenterTextAll("The sheriff has been killed.");
+			i_CountSheriff = 0;
+			CreateTimer(10.0, Timer_ChooseNewSheriff);
+		}
+
+		if(b_IsMurderer[client] == true) { // Murder died. Innocents win.
+			b_IsMurderer[client] = false;
+			PrintToChatAll("%s The murderer has been killed.", MURDER_PREFIX);
+			PrintCenterTextAll("The murderer has been killed.");
+			i_CountMurderer = 0;
+			ForceTeamWin(TEAM_RED);
+		}
+		
+		// Put them in blue. Da.
+		if(b_IsRoundActive && IsValidClient(client)) {
+			if(GetClientTeam(client) == TEAM_RED) {
+				b_IsDead[client] = true;
+				TF2_ChangeClientTeam(client, TFTeam_Blue);
+				
+				if(GetTeamClientCount(TEAM_RED) < 2) { // To win, all innocent must be dead, including sheriff. So only 1 is alive, assumed to be the murderer.
+					ForceTeamWin(TEAM_RED);
+				}
+			}
+		}
+	}
+	
+	Event Escort = CreateEvent("player_escort_score", true);
+	SetEventInt(Escort, "player", attacker);
+	SetEventInt(Escort, "points", -100);
+	FireEvent(Escort);
+	
+	return Plugin_Handled;
+}
+
+stock bool IsValidClient(int client, bool isAlive=false)
+{
+    if(!client||client>MaxClients||client<1)    return false;
+    if(isAlive) return IsClientInGame(client) && IsPlayerAlive(client);
+    return IsClientInGame(client);
+}
+
+void PickSheriff() {
+	if(i_CountSheriff <= 0) { 
+		ArrayList client_list = new ArrayList(1, MaxClients);
+		int count;
+		int num_clients;
+		
+		num_clients = 1; // pick 1 sheriff only
+											
+		for(int i = 1; i <= MaxClients; i++) {
+			if(!b_IsMurderer[i]) {
+				b_IsMurderer[i] = false;
+				b_IsSheriff[i] = false;
+			}
+			
+			if(IsValidClient(i) && b_IsSheriff[i] == false && b_IsMurderer[i] == false && GetClientTeam(i) == TEAM_RED) {
+				client_list.Set(count++, i);
+			}
+		}
+
+		int index;
+		for(int i = 0; i < num_clients; i++) {
+			index = GetRandomInt(0, count--);
+				
+			if(IsValidClient(client_list.Get(index)) && b_IsSheriff[client_list.Get(index)] == false && b_IsMurderer[client_list.Get(index)] == false && GetClientTeam(client_list.Get(index)) == TEAM_RED && b_IsDead[client_list.Get(index)] == false) {
+				PrintCenterText(client_list.Get(index), "You are the sheriff this round!");
+				PrintToChat(client_list.Get(index), "%s You are the sheriff this round!", MURDER_PREFIX);
+				b_IsSheriff[client_list.Get(index)] = true;
+				
+				SpawnWeapon(client_list.Get(index), "tf_weapon_revolver", 161, 1, 0, "2 ; 10.0 ; 96 ; 4.0 ; 3 ; 0.1");
+				int iWeapon = GetPlayerWeaponSlot(client_list.Get(index), 1);
+				if(iWeapon > MaxClients && IsValidEntity(iWeapon))
+				SetEntPropEnt(client_list.Get(index), Prop_Send, "m_hActiveWeapon", iWeapon);
+				
+				i_CountSheriff = 1;
+			}
+			client_list.Erase(index);
+		}
+
+		delete client_list;  
+	}
+}
+
+void PickMurderer() {
+	if(i_CountMurderer <= 0) { 
+		ArrayList client_list = new ArrayList(1, MaxClients);
+		int count;
+		int num_clients;
+		
+		num_clients = 1; // pick 1 murderer only
+											
+		for(int i = 1; i <= MaxClients; i++) {
+			if(!b_IsSheriff[i]) {
+				b_IsMurderer[i] = false;
+				b_IsSheriff[i] = false;
+			}
+			
+			if(IsValidClient(i) && b_IsMurderer[i] == false && b_IsSheriff[i] == false && GetClientTeam(i) == TEAM_RED) {
+				client_list.Set(count++, i);
+			}
+		}
+
+		int index;
+		for(int i = 0; i < num_clients; i++) {
+			index = GetRandomInt(0, count--);
+				
+			if(IsValidClient(client_list.Get(index)) && b_IsMurderer[client_list.Get(index)] == false && b_IsSheriff[client_list.Get(index)] == false && GetClientTeam(client_list.Get(index)) == TEAM_RED) {
+				PrintCenterText(client_list.Get(index), "You are the murderer this round!");
+				PrintToChat(client_list.Get(index), "%s You are the murderer this round!", MURDER_PREFIX);
+				b_IsMurderer[client_list.Get(index)] = true;
+				
+				SpawnWeapon(client_list.Get(index), "tf_weapon_knife", 4, 1, 0, "2 ; 10.0");
+				int iWeapon = GetPlayerWeaponSlot(client_list.Get(index), 1);
+				if(iWeapon > MaxClients && IsValidEntity(iWeapon))
+				SetEntPropEnt(client_list.Get(index), Prop_Send, "m_hActiveWeapon", iWeapon);
+				
+				i_CountMurderer = 1;
+			}
+			client_list.Erase(index);
+		}
+
+		delete client_list;  
+	}
+}
+
+stock int SpawnWeapon(int client, char[] name, int index, int level, int qual, char[] att)
+{
+    Handle hWeapon = TF2Items_CreateItem(OVERRIDE_ALL|FORCE_GENERATION|PRESERVE_ATTRIBUTES);
+    if (hWeapon == INVALID_HANDLE)
+        return -1;
+    TF2Items_SetClassname(hWeapon, name);
+    TF2Items_SetItemIndex(hWeapon, index);
+    TF2Items_SetLevel(hWeapon, level);
+    TF2Items_SetQuality(hWeapon, qual);
+    char atts[32][32];
+    int count = ExplodeString(att, " ; ", atts, 32, 32);
+    if (count > 1)
+    {
+        TF2Items_SetNumAttributes(hWeapon, count/2);
+        int i2 = 0;
+        for (int i = 0; i < count; i += 2)
+        {
+            TF2Items_SetAttribute(hWeapon, i2, StringToInt(atts[i]), StringToFloat(atts[i+1]));
+            i2++;
+        }
+    }  else {
+        TF2Items_SetNumAttributes(hWeapon, 0);
+	}
+    int entity = TF2Items_GiveNamedItem(client, hWeapon);
+    CloseHandle(hWeapon);
+    EquipPlayerWeapon(client, entity);
+    return entity;
+}
+
+public void KillTimerSafe(Handle &hTimer)
+{
+	if(hTimer != INVALID_HANDLE)
+	{
+		KillTimer(hTimer);
+		hTimer = INVALID_HANDLE;
+	}
+}
+
+public Action Hook_CommandSay(int client, const char[] command, int argc)
+{
+	if (!b_gIsEnabled) return Plugin_Continue;
+	
+	if(IsValidClient(client)) {
+		if(GetClientTeam(client) == TEAM_BLUE || GetClientTeam(client) == TEAM_SPEC) {
+			char sMessage[256];
+			GetCmdArgString(sMessage, sizeof(sMessage));
+			FakeClientCommand(client, "say_team %s", sMessage);
+			return Plugin_Handled;
+		}
+	}
+	
+	return Plugin_Continue;
+}
+
+public Action Hook_Suicide(int client, const char[] command, int argc)
+{
+	if (!b_gIsEnabled) return Plugin_Continue;
+	
+	if(IsValidClient(client)) {
+		PrintToChat(client, "%s You can not suicide.", MURDER_PREFIX);
+		return Plugin_Handled;
+	}
+	
+	return Plugin_Continue;
+}
+
+public Action Timer_StartRound(Handle timer) 
+{
+	PickSheriff();
+	PickMurderer();
+	
+	ChangeFreeState(true);
+	
+	KillTimerSafe(g_Timer_Start);
+	
+	//b_IsRoundActive = true;
+}
+
+public Action Timer_WaitingPlayers(Handle timer, int client)
+{
+	int RequiredToStart = (3 - (GetTeamClientCount(TEAM_RED) + GetTeamClientCount(TEAM_BLUE)));
+	
+	if(RequiredToStart != 0)
+	{
+		PrintCenterText(client, "Waiting for players! %i more required to start...", RequiredToStart);
+	}
+	else
+	{
+		KillTimerSafe(g_Timer_Waiting[client]);
+	}
+	
+	return Plugin_Continue;
+}
+
+public void Event_RoundWin(Handle event, const char[] name, bool dontBroadcast)
+{
+	//int client = GetClientOfUserId(GetEventInt(event, "userid"));
+	
+	ChangeFreeState(false);
+	
+	//b_gIsEnabled = false;
+	b_IsRoundActive = false;
+	b_HasSentMMReady = false;
+	b_HasSentMMReq = false;
+	i_CountSheriff = 0;
+	i_CountMurderer = 0;
+	
+	for(int index = 1; index <= MaxClients; index++) {
+		//TF2_RespawnPlayer(index);
+		b_IsSheriff[index] = false;
+		b_IsMurderer[index] = false;
+		b_IsDead[index] = false;
+		KillTimerSafe(g_Timer_ClientWeps[index]);
+		KillTimerSafe(g_Timer_Waiting[index]);
+		KillTimerSafe(g_Hud_Timer[index]);
+	}
+	
+	KillTimerSafe(g_Timer_Start);
+}
