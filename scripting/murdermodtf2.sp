@@ -32,7 +32,7 @@ Handle g_Timer_Waiting[MAXPLAYERS+1] = INVALID_HANDLE;
 Handle g_Hud_Timer[MAXPLAYERS+1] = INVALID_HANDLE;
 Handle g_Cvar_Spec = INVALID_HANDLE;
 Handle g_Cvar_Freeze = INVALID_HANDLE;
-Handle g_Cvar_Unbalance_Limit = INVALID_HANDLE;
+Handle g_Timer_ClientCheck[MAXPLAYERS+1] = INVALID_HANDLE;
 
 bool b_gIsEnabled = false;
 bool b_IsRoundActive = false;
@@ -91,14 +91,12 @@ public void OnConfigsExecuted()
 	g_Cvar_Alltalk = FindConVar("sv_alltalk");
 	g_Cvar_Spec = FindConVar("mp_allowspectators");
 	g_Cvar_Freeze = FindConVar("spec_freeze_time");
-	g_Cvar_Unbalance_Limit = FindConVar("mp_teams_unbalance_limit");
 	
 	SetConVarInt(g_Cvar_Waiting, 1);
 	SetConVarInt(g_Cvar_Alltalk, 0);
 	SetConVarInt(g_Cvar_AutoBalance, 0);
 	SetConVarInt(g_Cvar_Spec, 0);
 	SetConVarInt(g_Cvar_Freeze, 10000000);
-	SetConVarInt(g_Cvar_Unbalance_Limit, 1);
 }
 
 public void OnMapStart()
@@ -162,6 +160,7 @@ public void OnClientDisconnect(int client) {
 	KillTimerSafe(g_Timer_ClientWeps[client]);
 	KillTimerSafe(g_Timer_Waiting[client]);
 	KillTimerSafe(g_Hud_Timer[client]);
+	KillTimerSafe(g_Timer_ClientCheck[client]);
 }
 
 stock int TotalTeamCount()
@@ -368,16 +367,12 @@ public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcas
 		//b_IsRoundActive = true;
 		
 		for(int i = 1; i <= MaxClients; i++) {
-			if(TF2_GetClientTeam(i) == TFTeam_Spectator)
-			{
-				TF2_ChangeClientTeam(i, TFTeam_Red);
-			}
-			
 			if(IsValidClient(i) && GetClientTeam(i) == TEAM_RED) {
 				KillTimerSafe(g_Timer_ClientWeps[i]);
 				float CWTime = SetupTime + 5.0;
 				g_Timer_ClientWeps[i] = CreateTimer(CWTime, Timer_ControlWeapons, i, TIMER_REPEAT);
 				g_Hud_Timer[i] = CreateTimer(3.0, Timer_Hud, i, TIMER_REPEAT);
+				g_Timer_ClientCheck[i] = CreateTimer(1.0, Timer_ClientCheck, i, TIMER_REPEAT);
 			}
 		}
 	}
@@ -385,28 +380,69 @@ public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcas
 	return Plugin_Continue;
 }
 
+public Action Timer_ClientCheck(Handle timer, int client)
+{
+	if(IsValidClient(client))
+	{
+		if(!IsPlayerAlive(client))
+		{
+			if(!b_IsRoundActive && b_IsDead[client] == false)
+			{
+				TF2_ChangeClientTeam(client, TFTeam_Red);
+				TF2_RespawnPlayer(client);
+			}
+			
+			if(GetClientTeam(client) == TEAM_RED && b_IsRoundActive == true)
+			{
+				TF2_ChangeClientTeam(client, TFTeam_Blue);
+			}
+			
+			if(b_IsMurderer[client])
+			{
+				b_IsMurderer[client] = false;
+				i_CountMurderer = 0;
+			}
+			
+			if(b_IsSheriff[client])
+			{
+				b_IsSheriff[client] = false;
+				i_CountSheriff = 0;
+			}
+		}
+		
+		if(TF2_GetClientTeam(client) == TFTeam_Spectator && b_IsDead[client] == false && b_IsRoundActive == false) // Fixes stuck in spectator mode
+		{
+			TF2_ChangeClientTeam(client, TFTeam_Red);
+		}
+	}
+}
+
 public Action Timer_Hud(Handle timer, int client)
 {
-	Handle hHudRole = CreateHudSynchronizer();
-	SetHudTextParams(0.02, 0.02, 3.0, 0, 255, 0, 255);
-	if(!b_IsRoundActive)
-	{
-		ShowSyncHudText(client, hHudRole, "Round pending");
-	} 
-	else if(b_IsMurderer[client])
-	{
-		ShowSyncHudText(client, hHudRole, "Murderer (hold M2 to run)");
-	} 
-	else if(b_IsSheriff[client])
-	{
-		ShowSyncHudText(client, hHudRole, "Sheriff");
-	} 
-	else if(!b_IsSheriff[client] && !b_IsMurderer[client])
-	{
-		ShowSyncHudText(client, hHudRole, "Innocent");
-	}
 	
-	CloseHandle(hHudRole);
+	if(IsValidClient(client)) 
+	{
+		Handle hHudRole = CreateHudSynchronizer();
+		SetHudTextParams(0.02, 0.02, 3.0, 0, 255, 0, 255);
+		if(!b_IsRoundActive)
+		{
+			ShowSyncHudText(client, hHudRole, "Round pending");
+		} 
+		else if(b_IsMurderer[client])
+		{
+			ShowSyncHudText(client, hHudRole, "Murderer (hold M2 to run)");
+		} 
+		else if(b_IsSheriff[client])
+		{
+			ShowSyncHudText(client, hHudRole, "Sheriff");
+		} 
+		else if(!b_IsSheriff[client] && !b_IsMurderer[client])
+		{
+			ShowSyncHudText(client, hHudRole, "Innocent");
+		}
+		
+		CloseHandle(hHudRole);
+	}
 }
 
 public Action Event_PostInventory(Event event, const char[] name, bool dontBroadcast) 
@@ -480,11 +516,14 @@ public Action Event_PlayerSpawn(Event event, const char[] name, bool dontBroadca
 			
 			if(b_IsRoundActive) {
 				if(GetClientTeam(client) == TEAM_BLUE && b_IsDead[client] == true) {
-					TF2_ChangeClientTeam(client, TFTeam_Spectator);
+					//TF2_ChangeClientTeam(client, TFTeam_Spectator);
+					//TF2_ChangeClientTeam(client, TFTeam_Blue);
+					ForcePlayerSuicide(client);
 				}
 				
 				if(GetClientTeam(client) == TEAM_RED && b_IsDead[client] == true) {
-					TF2_ChangeClientTeam(client, TFTeam_Spectator);
+					//TF2_ChangeClientTeam(client, TFTeam_Spectator);
+					TF2_ChangeClientTeam(client, TFTeam_Blue);
 				}
 			}
 		}
@@ -827,6 +866,7 @@ public void Event_RoundWin(Handle event, const char[] name, bool dontBroadcast)
 		KillTimerSafe(g_Timer_ClientWeps[index]);
 		KillTimerSafe(g_Timer_Waiting[index]);
 		KillTimerSafe(g_Hud_Timer[index]);
+		KillTimerSafe(g_Timer_ClientCheck[index]);
 	}
 	
 	KillTimerSafe(g_Timer_Start);
