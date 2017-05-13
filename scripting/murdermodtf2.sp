@@ -586,6 +586,7 @@ public Action Event_PlayerDeath(Handle event, const char[] name, bool dontBroadc
 		// Put them in blue. Da.
 		if(b_IsRoundActive && IsValidClient(client)) {
 			if(GetClientTeam(client) == TEAM_RED) {
+				SetEventBroadcast(event, true);
 				b_IsDead[client] = true;
 				TF2_ChangeClientTeam(client, TFTeam_Blue);
 				
