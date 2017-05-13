@@ -74,7 +74,7 @@ public void OnPluginStart()
 	HookEvent("player_spawn", Event_PlayerSpawn);
 	HookEvent("post_inventory_application", Event_PostInventory);
 	HookEvent("player_team", Event_TeamsChange); 
-	HookEvent("player_death", Event_PlayerDeath);
+	HookEvent("player_death", Event_PlayerDeath, EventHookMode_Pre);
 	
 	AddCommandListener(Hook_CommandSay, "say");
 	AddCommandListener(Hook_Suicide, "kill");
@@ -368,6 +368,11 @@ public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcas
 		//b_IsRoundActive = true;
 		
 		for(int i = 1; i <= MaxClients; i++) {
+			if(TF2_GetClientTeam(i) == TFTeam_Spectator)
+			{
+				TF2_ChangeClientTeam(i, TFTeam_Red);
+			}
+			
 			if(IsValidClient(i) && GetClientTeam(i) == TEAM_RED) {
 				KillTimerSafe(g_Timer_ClientWeps[i]);
 				float CWTime = SetupTime + 5.0;
@@ -494,10 +499,16 @@ public Action Event_TeamsChange(Handle event, const char[] name, bool dontBroadc
         SetEntProp(client, Prop_Send, "m_iDesiredPlayerClass", TF2_GetPlayerClass(client)>=TFClass_Scout ? (view_as<TFClassType>(TF2_GetPlayerClass(client))) : TFClass_Spy); // So we assign one to prevent living spectators
     }
 	
-	if(team == TEAM_BLUE && IsValidClient(client)) {
+	if(b_IsDead[client] && team == TEAM_RED)
+	{
+		ForcePlayerSuicide(client);
+		ChangeClientTeam(client, TEAM_BLUE);
+	}
+	
+	/*if(team == TEAM_BLUE && IsValidClient(client)) {
 		ForcePlayerSuicide(client);
 		ChangeClientTeam(client, TEAM_RED);
-	}
+	}*/
 	
 	return Plugin_Continue;
 }
@@ -585,8 +596,9 @@ public Action Event_PlayerDeath(Handle event, const char[] name, bool dontBroadc
 		
 		// Put them in blue. Da.
 		if(b_IsRoundActive && IsValidClient(client)) {
+			SetEventBroadcast(event, true);
+			
 			if(GetClientTeam(client) == TEAM_RED) {
-				SetEventBroadcast(event, true);
 				b_IsDead[client] = true;
 				TF2_ChangeClientTeam(client, TFTeam_Blue);
 				
