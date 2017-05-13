@@ -13,7 +13,7 @@
 
 #pragma newdecls required
 
-#define PLUGIN_VERSION "0.2 BETA"
+#define PLUGIN_VERSION "0.3 BETA"
 #define TEAM_UNSIG 0
 #define TEAM_SPEC 1
 #define TEAM_RED 2
@@ -480,6 +480,10 @@ public Action Event_PlayerSpawn(Event event, const char[] name, bool dontBroadca
 			
 			if(b_IsRoundActive) {
 				if(GetClientTeam(client) == TEAM_BLUE && b_IsDead[client] == true) {
+					TF2_ChangeClientTeam(client, TFTeam_Spectator);
+				}
+				
+				if(GetClientTeam(client) == TEAM_RED && b_IsDead[client] == true) {
 					TF2_ChangeClientTeam(client, TFTeam_Spectator);
 				}
 			}
