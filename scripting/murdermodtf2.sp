@@ -79,6 +79,7 @@ public void OnPluginStart()
 	AddCommandListener(Hook_CommandSay, "say");
 	AddCommandListener(Hook_Suicide, "kill");
 	AddCommandListener(Hook_Suicide, "explode");
+	AddCommandListener(Hook_Suicide, "joinclass");
 	
 	RegConsoleCmd("sm_mmhelp", Command_MMHelp, "Usage: sm_mmhelp");	
 }
@@ -170,16 +171,27 @@ stock int TotalTeamCount()
 
 public Action Command_MMHelp(int client, int args)
 {
-	if(args > 0) {
-		ReplyToCommand(client, "%s Usage: sm_mmhelp", MURDER_PREFIX);
-		return Plugin_Continue;
-	} else {
-		PrintToChat(client, "%s - There is one murderer. The murderer has a knife and must kill everyone to win.", MURDER_PREFIX);
-		PrintToChat(client, "%s - There is one sheriff. The sheriff has a knife and must kill the murderer to win.", MURDER_PREFIX);
-		PrintToChat(client, "%s - Innocents must be protected by the sheriff, from the murderer. They are defenseless.", MURDER_PREFIX);
-		PrintToChat(client, "%s - When the sheriff dies, a new one is randomly picked.", MURDER_PREFIX);
+	Panel panel = new Panel();
+	panel.SetTitle("How to play Murder");
+	panel.DrawItem("There is one murderer. The murderer has a knife and must kill everyone to win.");
+	panel.DrawItem("There is one sheriff. The sheriff has a gun and must kill the murderer to win.");
+	panel.DrawItem("Innocents must be protected by the sheriff, from the murderer. They are defenseless.");
+	panel.DrawItem("When the sheriff dies, a new one is randomly picked.");
+ 
+	panel.Send(client, MMHelp_Handler, 30);
+ 
+	delete panel;
+ 
+	return Plugin_Handled;
+}
+
+public int MMHelp_Handler(Menu menu, MenuAction action, int param1, int param2)
+{
+	if (action == MenuAction_Select)
+	{
 		
-		return Plugin_Continue;
+	} else if (action == MenuAction_Cancel) {
+		
 	}
 }
 
@@ -371,7 +383,7 @@ public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcas
 				KillTimerSafe(g_Timer_ClientWeps[i]);
 				float CWTime = SetupTime + 5.0;
 				g_Timer_ClientWeps[i] = CreateTimer(CWTime, Timer_ControlWeapons, i, TIMER_REPEAT);
-				g_Hud_Timer[i] = CreateTimer(3.0, Timer_Hud, i, TIMER_REPEAT);
+				g_Hud_Timer[i] = CreateTimer(0.1, Timer_Hud, i, TIMER_REPEAT);
 				g_Timer_ClientCheck[i] = CreateTimer(1.0, Timer_ClientCheck, i, TIMER_REPEAT);
 			}
 		}
@@ -414,6 +426,15 @@ public Action Timer_ClientCheck(Handle timer, int client)
 		{
 			TF2_ChangeClientTeam(client, TFTeam_Red);
 		}
+		
+		if(!b_IsMurderer[client] && !b_IsSheriff[client])
+		{
+			SetWeaponInvis(client);
+		}
+		else
+		{
+			SetWeaponInvis(client, false);
+		}
 	}
 }
 
@@ -423,22 +444,27 @@ public Action Timer_Hud(Handle timer, int client)
 	if(IsValidClient(client)) 
 	{
 		Handle hHudRole = CreateHudSynchronizer();
-		SetHudTextParams(0.02, 0.02, 3.0, 0, 255, 0, 255);
+		SetHudTextParams(0.02, 0.02, 0.1, 0, 255, 0, 255);
+		
 		if(!b_IsRoundActive)
 		{
 			ShowSyncHudText(client, hHudRole, "Round pending");
 		} 
-		else if(b_IsMurderer[client])
+		else if(b_IsMurderer[client] && !b_IsDead[client])
 		{
 			ShowSyncHudText(client, hHudRole, "Murderer (hold M2 to run)");
 		} 
-		else if(b_IsSheriff[client])
+		else if(b_IsSheriff[client] && !b_IsDead[client])
 		{
 			ShowSyncHudText(client, hHudRole, "Sheriff");
 		} 
-		else if(!b_IsSheriff[client] && !b_IsMurderer[client])
+		else if(!b_IsSheriff[client] && !b_IsMurderer[client] && !b_IsDead[client])
 		{
 			ShowSyncHudText(client, hHudRole, "Innocent");
+		}
+		else if(!IsPlayerAlive(client) && b_IsRoundActive)
+		{
+			ShowSyncHudText(client, hHudRole, "Dead");
 		}
 		
 		CloseHandle(hHudRole);
@@ -462,7 +488,8 @@ public Action Event_PostInventory(Event event, const char[] name, bool dontBroad
 		if(GetClientTeam(client) == TEAM_RED && b_IsRoundActive == true) {
 			if(b_IsMurderer[client]) {
 				SpawnWeapon(client, "tf_weapon_knife", 4, 1, 0, "2 ; 10.0");
-			} else if(b_IsSheriff[client]) {
+			} 
+			else if(b_IsSheriff[client]) {
 				SpawnWeapon(client, "tf_weapon_revolver", 161, 1, 0, "2 ; 10.0 ; 96 ; 4.0 ; 3 ; 0.1");
 			}
 		}
@@ -810,12 +837,25 @@ public Action Hook_Suicide(int client, const char[] command, int argc)
 	if (!b_gIsEnabled) return Plugin_Continue;
 	
 	if(IsValidClient(client)) {
-		PrintToChat(client, "%s You can not suicide.", MURDER_PREFIX);
+		PrintToChat(client, "%s You are not allowed to do that.", MURDER_PREFIX);
 		return Plugin_Handled;
 	}
 	
 	return Plugin_Continue;
 }
+
+stock int SetWeaponInvis(int client, bool set = true) 
+{  
+    for (int i = 0; i < 5; i++) 
+    {  
+        int entity = GetPlayerWeaponSlot(client, i);  
+        if (entity != -1) 
+        {  
+            SetEntityRenderMode(entity, RENDER_TRANSCOLOR);  
+            SetEntityRenderColor(entity, _, _, _, set ? 200 : 255);  
+        }  
+    } 
+}  
 
 public Action Timer_StartRound(Handle timer) 
 {
