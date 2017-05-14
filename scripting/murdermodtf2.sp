@@ -515,7 +515,7 @@ public Action Event_PlayerSpawn(Event event, const char[] name, bool dontBroadca
 			}
 			
 			if(b_IsRoundActive) {
-				if(GetClientTeam(client) == TEAM_BLUE && b_IsDead[client] == true) {
+				if(GetClientTeam(client) == TEAM_BLUE) {
 					//TF2_ChangeClientTeam(client, TFTeam_Spectator);
 					//TF2_ChangeClientTeam(client, TFTeam_Blue);
 					ForcePlayerSuicide(client);
