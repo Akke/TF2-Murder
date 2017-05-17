@@ -7,20 +7,21 @@
 #include <tf2_stocks>
 #include <tf2>
 #include <tf2items>
-#include <morecolors>
+#include morecolors
 #include <tf2attributes>
 #include <smlib>
 
 #pragma newdecls required
 
-#define PLUGIN_VERSION "0.3 BETA"
+#define PLUGIN_VERSION "0.4 BETA"
 #define TEAM_UNSIG 0
 #define TEAM_SPEC 1
 #define TEAM_RED 2
 #define TEAM_BLUE 3
-#define MURDER_PREFIX "\x04[Murder Mod]\x01"
+#define MURDER_PREFIX "{green}[Murder Mod]{default}"
 
 ConVar g_hCvarSetupTime;
+ConVar g_hCvarAntiAFK;
 
 Handle g_Timer_Start = INVALID_HANDLE;
 ConVar g_Cvar_FriendlyFire;
@@ -33,6 +34,8 @@ Handle g_Hud_Timer[MAXPLAYERS+1] = INVALID_HANDLE;
 Handle g_Cvar_Spec = INVALID_HANDLE;
 Handle g_Cvar_Freeze = INVALID_HANDLE;
 Handle g_Timer_ClientCheck[MAXPLAYERS+1] = INVALID_HANDLE;
+Handle g_Timer_MurdererAntiAFK[MAXPLAYERS+1] = INVALID_HANDLE;
+Handle g_Timer_ChatAnnounce[MAXPLAYERS+1] = INVALID_HANDLE;
 
 bool b_gIsEnabled = false;
 bool b_IsRoundActive = false;
@@ -44,6 +47,8 @@ bool b_HasSentMMReady = false;
 
 int i_CountMurderer = 0;
 int i_CountSheriff = 0;
+int Murderer_LastKill[MAXPLAYERS+1] = 0;
+int Warnings[MAXPLAYERS+1] = 0;
 
 #define MAX_BUTTONS 25
 int g_LastButtons[MAXPLAYERS+1];
@@ -65,6 +70,7 @@ public void OnPluginStart()
 	AddServerTag("mm");
 	
 	g_hCvarSetupTime = CreateConVar("sm_mm_setuptime", "45.0", "Amount of seconds before sheriff and murderer is chosen. Default is 45.0 seconds.");
+	g_hCvarAntiAFK = CreateConVar("sm_mm_antiafk", "60.0", "Amount of seconds after the most recent kill by the murderer before someone else is made into the murderer.");
 
 	HookEvent("teamplay_round_start", Event_RoundStartSoon);
 	HookEvent("teamplay_round_active", Event_RoundStart);
@@ -126,6 +132,8 @@ public void OnClientPutInServer(int client)
 	} else {
 		b_IsDead[client] = false;
 	}
+	
+	g_Timer_ChatAnnounce[client] = CreateTimer(70.0, Timer_ChatAnnounce, client, TIMER_REPEAT); 
 }
 
 public void OnClientDisconnect_Post(int client)
@@ -136,6 +144,8 @@ public void OnClientDisconnect_Post(int client)
 
 public void OnClientDisconnect(int client) {
 	b_IsDead[client] = false;
+	Warnings[client] = 0;
+
 	if(b_IsSheriff[client]) {
 		i_CountSheriff = 0;
 		PickSheriff();
@@ -146,8 +156,10 @@ public void OnClientDisconnect(int client) {
 	
 	if(b_IsMurderer[client]) {
 		i_CountMurderer = 0;
+		Murderer_LastKill[client] = 0;
 		PickMurderer();
 		b_IsMurderer[client] = false;
+		KillTimerSafe(g_Timer_MurdererAntiAFK[client]);
 	} else {
 		b_IsMurderer[client] = false;
 	}
@@ -162,6 +174,7 @@ public void OnClientDisconnect(int client) {
 	KillTimerSafe(g_Timer_Waiting[client]);
 	KillTimerSafe(g_Hud_Timer[client]);
 	KillTimerSafe(g_Timer_ClientCheck[client]);
+	KillTimerSafe(g_Timer_ChatAnnounce[client]);
 }
 
 stock int TotalTeamCount()
@@ -262,6 +275,44 @@ public Action Event_RoundStartSoon(Event event, const char[] name, bool dontBroa
 		{
 			b_IsMurderer[client] = false;
 			b_IsSheriff[client] = false;
+		}
+	}
+}
+
+public Action Timer_ChatAnnounce(Handle timer, int client)
+{
+	int ChatMessages = GetRandomInt(0,5);
+
+	switch(ChatMessages) 
+	{
+		case 0:
+		{
+			CPrintToChat(client, "%s {olive}This gamemode was created by SomePanns from AlliedMods.net with help from the contributor SnowTigerVidz.", MURDER_PREFIX);
+		}
+		
+		case 1:
+		{
+			CPrintToChat(client, "%s {olive}This server is running TF2 Murder (%s) created by SomePanns.", MURDER_PREFIX, PLUGIN_VERSION);
+		}
+		
+		case 2:
+		{
+			CPrintToChat(client, "%s {olive}New to this gamemode? Type !mmhelp in the chat to bring up the help menu!", MURDER_PREFIX);
+		}
+		
+		case 3:
+		{
+			CPrintToChat(client, "%s {olive}When the sheriff dies, a new one is randomly chosen after some time.", MURDER_PREFIX);
+		}
+		
+		case 4:
+		{
+			CPrintToChat(client, "%s {olive}A new murderer will be chosen if the current one does not manage to kill anyone.", MURDER_PREFIX);
+		}
+		
+		case 5:
+		{
+			CPrintToChat(client, "%s {olive}Want to come with a suggestion? Add the creator on Steam: http://steamcommunity.com/profiles/76561198082943320/", MURDER_PREFIX);
 		}
 	}
 }
@@ -515,7 +566,7 @@ public Action Event_PlayerSpawn(Event event, const char[] name, bool dontBroadca
 			if(iTotalTeamCount > 2) {
 				if(!b_gIsEnabled) {
 					if(b_HasSentMMReady == false) {
-						PrintToChat(client, "%s 3 or more players found, starting Murder Mod.", MURDER_PREFIX);
+						CPrintToChat(client, "%s 3 or more players found, starting Murder Mod.", MURDER_PREFIX);
 						b_HasSentMMReady = true;
 						KillTimerSafe(g_Timer_Waiting[client]);
 					}
@@ -650,7 +701,7 @@ public Action Event_PlayerDeath(Handle event, const char[] name, bool dontBroadc
 			
 		if(b_IsSheriff[client] == true) { // Sheriff has died.
 			b_IsSheriff[client] = false;
-			PrintToChatAll("%s The sheriff has been killed.", MURDER_PREFIX);
+			CPrintToChatAll("%s The sheriff has been killed.", MURDER_PREFIX);
 			PrintCenterTextAll("The sheriff has been killed.");
 			i_CountSheriff = 0;
 			CreateTimer(10.0, Timer_ChooseNewSheriff);
@@ -658,10 +709,19 @@ public Action Event_PlayerDeath(Handle event, const char[] name, bool dontBroadc
 
 		if(b_IsMurderer[client] == true) { // Murder died. Innocents win.
 			b_IsMurderer[client] = false;
-			PrintToChatAll("%s The murderer has been killed.", MURDER_PREFIX);
-			PrintCenterTextAll("The murderer has been killed.");
+			Warnings[client] = 0;
+			Murderer_LastKill[client] = 0;
+			
+			CPrintToChatAll("%s The murderer this round was %N", MURDER_PREFIX, client);
+			PrintCenterTextAll("The murderer has been killed. Innocents win!");
 			i_CountMurderer = 0;
 			ForceTeamWin(TEAM_RED);
+			KillTimerSafe(g_Timer_MurdererAntiAFK[client]);
+		}
+		
+		if(b_IsMurderer[attacker])
+		{
+			Murderer_LastKill[attacker] = GetTime();
 		}
 		
 		// Put them in blue. Da.
@@ -719,7 +779,7 @@ void PickSheriff() {
 				
 			if(IsValidClient(client_list.Get(index)) && b_IsSheriff[client_list.Get(index)] == false && b_IsMurderer[client_list.Get(index)] == false && GetClientTeam(client_list.Get(index)) == TEAM_RED && b_IsDead[client_list.Get(index)] == false) {
 				PrintCenterText(client_list.Get(index), "You are the sheriff this round!");
-				PrintToChat(client_list.Get(index), "%s You are the sheriff this round!", MURDER_PREFIX);
+				CPrintToChat(client_list.Get(index), "%s You are the sheriff this round!", MURDER_PREFIX);
 				b_IsSheriff[client_list.Get(index)] = true;
 				
 				SpawnWeapon(client_list.Get(index), "tf_weapon_revolver", 161, 1, 0, "2 ; 10.0 ; 96 ; 4.0 ; 3 ; 0.1");
@@ -761,15 +821,18 @@ void PickMurderer() {
 				
 			if(IsValidClient(client_list.Get(index)) && b_IsMurderer[client_list.Get(index)] == false && b_IsSheriff[client_list.Get(index)] == false && GetClientTeam(client_list.Get(index)) == TEAM_RED) {
 				PrintCenterText(client_list.Get(index), "You are the murderer this round!");
-				PrintToChat(client_list.Get(index), "%s You are the murderer this round!", MURDER_PREFIX);
+				CPrintToChat(client_list.Get(index), "%s You are the murderer this round!", MURDER_PREFIX);
 				b_IsMurderer[client_list.Get(index)] = true;
 				
 				SpawnWeapon(client_list.Get(index), "tf_weapon_knife", 4, 1, 0, "2 ; 10.0");
 				int iWeapon = GetPlayerWeaponSlot(client_list.Get(index), 1);
 				if(iWeapon > MaxClients && IsValidEntity(iWeapon))
 				SetEntPropEnt(client_list.Get(index), Prop_Send, "m_hActiveWeapon", iWeapon);
-				
+
 				i_CountMurderer = 1;
+				
+				float AntiAFKTime = (GetConVarFloat(g_hCvarAntiAFK) / 3);
+				g_Timer_MurdererAntiAFK[client_list.Get(index)] = CreateTimer(AntiAFKTime, Timer_MurdererAntiAFK, client_list.Get(index), TIMER_REPEAT);
 			}
 			client_list.Erase(index);
 		}
@@ -816,6 +879,42 @@ public void KillTimerSafe(Handle &hTimer)
 	}
 }
 
+public Action Timer_MurdererAntiAFK(Handle timer, int client)
+{
+	if(!b_IsMurderer[client])
+	{
+		KillTimerSafe(g_Timer_MurdererAntiAFK[client]);
+		return Plugin_Continue;
+	}
+	
+	if(Warnings[client] >= 3)
+	{
+		Warnings[client] = 0;
+	}
+	
+	float AntiAFKTimeWhole = GetConVarFloat(g_hCvarAntiAFK);
+	
+	if(GetTime() >= Murderer_LastKill[client]+(RoundToFloor(AntiAFKTimeWhole)))
+	{
+		Warnings[client]++;
+		CPrintToChat(client, "%s If you dont kill someone soon, you will no longer be the murderer.", MURDER_PREFIX);
+	}
+	else
+	{
+		Warnings[client] = 0;
+	}
+	
+	if(Warnings[client] >= 3)
+	{	
+		b_IsMurderer[client] = false;
+		i_CountMurderer = 0;
+		TF2_RemoveWeaponSlot(client, 2);
+		CPrintToChat(client, "%s You took too long and is no longer the murderer!", MURDER_PREFIX);
+	}
+	
+	return Plugin_Continue;
+}
+
 public Action Hook_CommandSay(int client, const char[] command, int argc)
 {
 	if (!b_gIsEnabled) return Plugin_Continue;
@@ -837,7 +936,7 @@ public Action Hook_Suicide(int client, const char[] command, int argc)
 	if (!b_gIsEnabled) return Plugin_Continue;
 	
 	if(IsValidClient(client)) {
-		PrintToChat(client, "%s You are not allowed to do that.", MURDER_PREFIX);
+		CPrintToChat(client, "%s You are not allowed to do that.", MURDER_PREFIX);
 		return Plugin_Handled;
 	}
 	
@@ -852,7 +951,7 @@ stock int SetWeaponInvis(int client, bool set = true)
         if (entity != -1) 
         {  
             SetEntityRenderMode(entity, RENDER_TRANSCOLOR);  
-            SetEntityRenderColor(entity, _, _, _, set ? 200 : 255);  
+            SetEntityRenderColor(entity, _, _, _, set ? 50 : 255);  
         }  
     } 
 }  
@@ -903,6 +1002,9 @@ public void Event_RoundWin(Handle event, const char[] name, bool dontBroadcast)
 		b_IsSheriff[index] = false;
 		b_IsMurderer[index] = false;
 		b_IsDead[index] = false;
+		Warnings[index] = 0;
+		Murderer_LastKill[index] = 0;
+		
 		KillTimerSafe(g_Timer_ClientWeps[index]);
 		KillTimerSafe(g_Timer_Waiting[index]);
 		KillTimerSafe(g_Hud_Timer[index]);
