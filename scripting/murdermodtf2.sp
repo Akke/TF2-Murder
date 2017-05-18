@@ -70,7 +70,7 @@ public void OnPluginStart()
 	AddServerTag("mm");
 	
 	g_hCvarSetupTime = CreateConVar("sm_mm_setuptime", "45.0", "Amount of seconds before sheriff and murderer is chosen. Default is 45.0 seconds.");
-	g_hCvarAntiAFK = CreateConVar("sm_mm_antiafk", "60.0", "Amount of seconds after the most recent kill by the murderer before someone else is made into the murderer.");
+	g_hCvarAntiAFK = CreateConVar("sm_mm_antiafk", "180.0", "Amount of seconds after the most recent kill by the murderer before someone else is made into the murderer.");
 
 	HookEvent("teamplay_round_start", Event_RoundStartSoon);
 	HookEvent("teamplay_round_active", Event_RoundStart);
