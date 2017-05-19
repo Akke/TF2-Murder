@@ -7,6 +7,7 @@
 #include <tf2_stocks>
 #include <tf2>
 #include <tf2items>
+#include <clientprefs>
 #include morecolors
 #include <tf2attributes>
 #include <smlib>
@@ -37,6 +38,8 @@ Handle g_Timer_ClientCheck[MAXPLAYERS+1] = INVALID_HANDLE;
 Handle g_Timer_MurdererAntiAFK[MAXPLAYERS+1] = INVALID_HANDLE;
 Handle g_Timer_ChatAnnounce[MAXPLAYERS+1] = INVALID_HANDLE;
 
+Handle g_MusicCookie = INVALID_HANDLE;
+
 bool b_gIsEnabled = false;
 bool b_IsRoundActive = false;
 bool b_IsSheriff[MAXPLAYERS+1] = false;
@@ -44,11 +47,14 @@ bool b_IsMurderer[MAXPLAYERS+1] = false;
 bool b_IsDead[MAXPLAYERS+1] = false;
 bool b_HasSentMMReq = false;
 bool b_HasSentMMReady = false;
+bool b_HasVotedResign[MAXPLAYERS+1] = false;
+bool b_MusicOff[MAXPLAYERS+1] = true;
 
 int i_CountMurderer = 0;
 int i_CountSheriff = 0;
 int Murderer_LastKill[MAXPLAYERS+1] = 0;
 int Warnings[MAXPLAYERS+1] = 0;
+int ResignVotes = 0;
 
 #define MAX_BUTTONS 25
 int g_LastButtons[MAXPLAYERS+1];
@@ -88,22 +94,50 @@ public void OnPluginStart()
 	AddCommandListener(Hook_Suicide, "joinclass");
 	
 	RegConsoleCmd("sm_mmhelp", Command_MMHelp, "Usage: sm_mmhelp");	
+	RegConsoleCmd("sm_newsheriff", Command_NewSheriff, "Usage: sm_newsheriff");	
+	RegConsoleCmd("sm_murdermusic", Command_MurderMusic, "Usage: sm_murdermusic");	
+	
+	g_MusicCookie = RegClientCookie("murder_music_cookie_musicdisabled", "Murder MusicCookie", CookieAccess_Private); // 1 to disable music and 0 to enable
+	
+	for (int i = MaxClients; i > 0; --i)
+    {
+        if (!AreClientCookiesCached(i))
+        {
+            continue;
+        }
+        
+        OnClientCookiesCached(i);
+    }
+}
+
+public void OnClientCookiesCached(int client)
+{
+	char sValue[8];
+    GetClientCookie(client, g_MusicCookie, sValue, sizeof(sValue));
+    
+    b_MusicOff[client] = (sValue[0] != '\0' && StringToInt(sValue));
 }
 
 public void OnConfigsExecuted()
 {
-	g_Cvar_FriendlyFire = FindConVar("mp_friendlyfire");
-	g_Cvar_AutoBalance = FindConVar("mp_autoteambalance");
-	g_Cvar_Waiting = FindConVar("mp_waitingforplayers_time");
-	g_Cvar_Alltalk = FindConVar("sv_alltalk");
-	g_Cvar_Spec = FindConVar("mp_allowspectators");
-	g_Cvar_Freeze = FindConVar("spec_freeze_time");
+	AddFileToDownloadsTable("sound/tfmurder/bgm.wav");
+	PrecacheSound("tfmurder/bgm.wav", true);
 	
+	g_Cvar_Waiting = FindConVar("mp_waitingforplayers_time");
 	SetConVarInt(g_Cvar_Waiting, 1);
-	SetConVarInt(g_Cvar_Alltalk, 0);
-	SetConVarInt(g_Cvar_AutoBalance, 0);
-	SetConVarInt(g_Cvar_Spec, 0);
-	SetConVarInt(g_Cvar_Freeze, 10000000);
+	
+	if(b_gIsEnabled) {
+		g_Cvar_FriendlyFire = FindConVar("mp_friendlyfire");
+		g_Cvar_AutoBalance = FindConVar("mp_autoteambalance");
+		g_Cvar_Alltalk = FindConVar("sv_alltalk");
+		g_Cvar_Spec = FindConVar("mp_allowspectators");
+		g_Cvar_Freeze = FindConVar("spec_freeze_time");
+		
+		SetConVarInt(g_Cvar_Alltalk, 0);
+		SetConVarInt(g_Cvar_AutoBalance, 0);
+		SetConVarInt(g_Cvar_Spec, 0);
+		SetConVarInt(g_Cvar_Freeze, 10000000);
+	}
 }
 
 public void OnMapStart()
@@ -111,13 +145,21 @@ public void OnMapStart()
 	b_IsRoundActive = false;
 	b_HasSentMMReady = false;
 	b_HasSentMMReq = false;
-
+	
 	ChangeFreeState(false);
 }
 
-public void OnMapEnd()
+public void OnEntityCreated(int entity, const char[] classname)
 {
-
+	if(entity > MaxClients && IsValidEntity(entity))
+	{
+		int ent = 0; 
+		ent = MaxClients+1; 
+		while((ent = FindEntityByClassname(ent, "tf_logic_arena")) != -1) 
+		{
+			AcceptEntityInput(ent, "Kill");
+		}
+	}
 }
 
 public void OnClientPutInServer(int client)
@@ -133,6 +175,8 @@ public void OnClientPutInServer(int client)
 		b_IsDead[client] = false;
 	}
 	
+	b_HasVotedResign[client] = true;
+	
 	g_Timer_ChatAnnounce[client] = CreateTimer(70.0, Timer_ChatAnnounce, client, TIMER_REPEAT); 
 }
 
@@ -145,6 +189,7 @@ public void OnClientDisconnect_Post(int client)
 public void OnClientDisconnect(int client) {
 	b_IsDead[client] = false;
 	Warnings[client] = 0;
+	b_HasVotedResign[client] = true;
 
 	if(b_IsSheriff[client]) {
 		i_CountSheriff = 0;
@@ -184,6 +229,8 @@ stock int TotalTeamCount()
 
 public Action Command_MMHelp(int client, int args)
 {
+	if(!b_gIsEnabled || !IsValidClient(client)) return Plugin_Continue;
+	
 	Panel panel = new Panel();
 	panel.SetTitle("How to play Murder");
 	panel.DrawItem("There is one murderer. The murderer has a knife and must kill everyone to win.");
@@ -194,6 +241,69 @@ public Action Command_MMHelp(int client, int args)
 	panel.Send(client, MMHelp_Handler, 30);
  
 	delete panel;
+ 
+	return Plugin_Handled;
+}
+
+public Action Command_MurderMusic(int client, int args)
+{
+	if(args > 0 || !b_gIsEnabled || !IsValidClient(client)) return Plugin_Continue;
+	
+	if(b_MusicOff[client]) // turn it off
+	{
+		b_MusicOff[client] = false;
+		
+		SetClientCookie(client, g_MusicCookie, "0");
+		CPrintToChat(client, "%s The music will be enabled next round.", MURDER_PREFIX);
+		OnClientCookiesCached(client);
+	}
+	else if(!b_MusicOff[client]) // turn it on
+	{
+		b_MusicOff[client] = true;
+		
+		SetClientCookie(client, g_MusicCookie, "1");
+		StopSound(client, SNDCHAN_AUTO, "tfmurder/bgm.wav");
+		CPrintToChat(client, "%s The music is now disabled until you do {green}!murdermusic {default}again.", MURDER_PREFIX);
+		OnClientCookiesCached(client);
+	}
+ 
+	return Plugin_Handled;
+}
+
+public Action Command_NewSheriff(int client, int args)
+{
+	if(args > 0 || !b_gIsEnabled || !IsValidClient(client)) return Plugin_Continue;
+	
+	if(b_HasVotedResign[client] || !b_IsRoundActive || TF2_GetClientTeam(client) != TFTeam_Red || b_IsMurderer[client] || b_IsSheriff[client])
+	{
+		CPrintToChat(client, "%s Permission denied. You can not do this yet.", MURDER_PREFIX);
+		return Plugin_Continue;
+	}
+	
+	//ResignVotes increase by 1 for each person that votes
+	//15 votes = 0.15
+	//20 people in red = 1.0
+	
+	ResignVotes++;
+	CPrintToChatAll("%s %N voted for the sheriff to resign.", MURDER_PREFIX, client);
+	float VotedFor = view_as<float>(ResignVotes / GetTeamClientCount(TEAM_RED));
+	
+	if(VotedFor >= 0.80)
+	{
+		for(int i = 0; i <= MaxClients; i++)
+		{
+			if(IsValidClient(i))
+			{
+				if(b_IsSheriff[i])
+				{
+					b_IsSheriff[i] = false;
+					i_CountSheriff = 0;
+					TF2_RemoveWeaponSlot(i, 0);
+					CPrintToChatAll("%s The people have spoken! The sheriff has been fired, picking a new one...", MURDER_PREFIX);
+				}
+			}
+		}
+	}
  
 	return Plugin_Handled;
 }
@@ -264,6 +374,7 @@ public Action Event_RoundStartSoon(Event event, const char[] name, bool dontBroa
 	int iTotalTeamCount = GetTeamClientCount(TEAM_RED) + GetTeamClientCount(TEAM_BLUE);
 	if(iTotalTeamCount > 2) {
 		b_gIsEnabled = true;
+		OnConfigsExecuted();
 	}
 	
 	i_CountSheriff = 0;
@@ -281,7 +392,7 @@ public Action Event_RoundStartSoon(Event event, const char[] name, bool dontBroa
 
 public Action Timer_ChatAnnounce(Handle timer, int client)
 {
-	int ChatMessages = GetRandomInt(0,5);
+	int ChatMessages = GetRandomInt(0,6);
 
 	switch(ChatMessages) 
 	{
@@ -313,6 +424,11 @@ public Action Timer_ChatAnnounce(Handle timer, int client)
 		case 5:
 		{
 			CPrintToChat(client, "%s {olive}Want to come with a suggestion? Add the creator on Steam: http://steamcommunity.com/profiles/76561198082943320/", MURDER_PREFIX);
+		}
+		
+		case 6:
+		{
+			CPrintToChat(client, "%s {olive}You can type {green}!newsheriff {olive}to vote for the current sheriff to resign. A new one will automatically be picked when the votes reach a threshold.", MURDER_PREFIX);
 		}
 	}
 }
@@ -383,7 +499,7 @@ public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcas
 		b_IsMurderer[index] = false;
 		b_IsDead[index] = false;
 	}
-	
+
 	int visul=-1;
 	while((visul=FindEntityByClassname(visul, "func_respawnroomvisualizer"))!=-1) 
 	{
@@ -429,18 +545,41 @@ public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcas
 		PrintCenterTextAll("Round begins in %i seconds!", RoundFloat(SetupTime));
 		//b_IsRoundActive = true;
 		
-		for(int i = 1; i <= MaxClients; i++) {
-			if(IsValidClient(i) && GetClientTeam(i) == TEAM_RED) {
-				KillTimerSafe(g_Timer_ClientWeps[i]);
-				float CWTime = SetupTime + 5.0;
-				g_Timer_ClientWeps[i] = CreateTimer(CWTime, Timer_ControlWeapons, i, TIMER_REPEAT);
-				g_Hud_Timer[i] = CreateTimer(0.1, Timer_Hud, i, TIMER_REPEAT);
-				g_Timer_ClientCheck[i] = CreateTimer(1.0, Timer_ClientCheck, i, TIMER_REPEAT);
+		for(int i = 0; i <= MaxClients; i++) {
+			if(IsValidClient(i))
+			{
+				if(!b_MusicOff[i])
+				{
+					StopSound(i, SNDCHAN_AUTO, "tfmurder/bgm.wav");
+					EmitSoundToClient(i, "tfmurder/bgm.wav", _, _, _, _, 0.3, _, _, _, _, false);
+				}
+		
+				if(GetClientTeam(i) == TEAM_RED) {
+					b_HasVotedResign[i] = false;
+					KillTimerSafe(g_Timer_ClientWeps[i]);
+					float CWTime = SetupTime + 5.0;
+					g_Timer_ClientWeps[i] = CreateTimer(CWTime, Timer_ControlWeapons, i, TIMER_REPEAT);
+					g_Hud_Timer[i] = CreateTimer(0.1, Timer_Hud, i, TIMER_REPEAT);
+					g_Timer_ClientCheck[i] = CreateTimer(1.0, Timer_ClientCheck, i, TIMER_REPEAT);
+				}
 			}
 		}
+		
+		CreateTimer(0.1, Timer_Doors, TIMER_REPEAT);
 	}
 
 	return Plugin_Continue;
+}
+
+public Action Timer_Doors(Handle timer)
+{
+	int doors=-1;
+	while((doors=FindEntityByClassname(doors, "func_door"))!=-1)
+    {
+        AcceptEntityInput(doors, "Open");
+    }
+	
+	KillTimerSafe(timer);
 }
 
 public Action Timer_ClientCheck(Handle timer, int client)
@@ -574,6 +713,7 @@ public Action Event_PlayerSpawn(Event event, const char[] name, bool dontBroadca
 					ForceTeamWin(TEAM_RED);
 					
 					b_gIsEnabled = true;
+					OnConfigsExecuted();
 				}
 			} else {
 				if(b_HasSentMMReq == false) {
@@ -756,6 +896,8 @@ stock bool IsValidClient(int client, bool isAlive=false)
 
 void PickSheriff() {
 	if(i_CountSheriff <= 0) { 
+		ResignVotes = 0;
+		
 		ArrayList client_list = new ArrayList(1, MaxClients);
 		int count;
 		int num_clients;
@@ -788,6 +930,7 @@ void PickSheriff() {
 				SetEntPropEnt(client_list.Get(index), Prop_Send, "m_hActiveWeapon", iWeapon);
 				
 				i_CountSheriff = 1;
+				SetWeaponInvis(client_list.Get(index), false);
 			}
 			client_list.Erase(index);
 		}
@@ -833,6 +976,7 @@ void PickMurderer() {
 				
 				float AntiAFKTime = (GetConVarFloat(g_hCvarAntiAFK) / 3);
 				g_Timer_MurdererAntiAFK[client_list.Get(index)] = CreateTimer(AntiAFKTime, Timer_MurdererAntiAFK, client_list.Get(index), TIMER_REPEAT);
+				SetWeaponInvis(client_list.Get(index), false);
 			}
 			client_list.Erase(index);
 		}
@@ -897,7 +1041,7 @@ public Action Timer_MurdererAntiAFK(Handle timer, int client)
 	if(GetTime() >= Murderer_LastKill[client]+(RoundToFloor(AntiAFKTimeWhole)))
 	{
 		Warnings[client]++;
-		CPrintToChat(client, "%s If you dont kill someone soon, you will no longer be the murderer.", MURDER_PREFIX);
+		CPrintToChat(client, "%s {red}If you dont kill someone soon, you will no longer be the murderer.", MURDER_PREFIX);
 	}
 	else
 	{
@@ -909,7 +1053,7 @@ public Action Timer_MurdererAntiAFK(Handle timer, int client)
 		b_IsMurderer[client] = false;
 		i_CountMurderer = 0;
 		TF2_RemoveWeaponSlot(client, 2);
-		CPrintToChat(client, "%s You took too long and is no longer the murderer!", MURDER_PREFIX);
+		CPrintToChat(client, "%s {red}You took too long and is no longer the murderer!", MURDER_PREFIX);
 	}
 	
 	return Plugin_Continue;
@@ -996,6 +1140,7 @@ public void Event_RoundWin(Handle event, const char[] name, bool dontBroadcast)
 	b_HasSentMMReq = false;
 	i_CountSheriff = 0;
 	i_CountMurderer = 0;
+	ResignVotes = 0;
 	
 	for(int index = 1; index <= MaxClients; index++) {
 		//TF2_RespawnPlayer(index);
@@ -1004,6 +1149,8 @@ public void Event_RoundWin(Handle event, const char[] name, bool dontBroadcast)
 		b_IsDead[index] = false;
 		Warnings[index] = 0;
 		Murderer_LastKill[index] = 0;
+		
+		StopSound(index, SNDCHAN_AUTO, "tfmurder/bgm.wav");
 		
 		KillTimerSafe(g_Timer_ClientWeps[index]);
 		KillTimerSafe(g_Timer_Waiting[index]);
