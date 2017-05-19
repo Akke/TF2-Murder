@@ -8,7 +8,7 @@
 #include <tf2>
 #include <tf2items>
 #include <clientprefs>
-#include morecolors
+#include <morecolors>
 #include <tf2attributes>
 #include <smlib>
 
