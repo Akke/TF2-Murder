@@ -14,7 +14,7 @@
 
 #pragma newdecls required
 
-#define PLUGIN_VERSION "0.5 BETA"
+#define PLUGIN_VERSION "0.5.1 BETA"
 #define TEAM_UNSIG 0
 #define TEAM_SPEC 1
 #define TEAM_RED 2
@@ -283,8 +283,9 @@ public Action Command_NewSheriff(int client, int args)
 	ResignVotes++;
 	CPrintToChatAll("%s %N voted for the sheriff to resign.", MURDER_PREFIX, client);
 	float VotedFor = view_as<float>(ResignVotes / GetTeamClientCount(TEAM_RED));
+	b_HasVotedResign[client] = true;
 	
-	if(VotedFor >= 0.80)
+	if(VotedFor >= 0.70)
 	{
 		for(int i = 0; i <= MaxClients; i++)
 		{
@@ -352,7 +353,7 @@ int OnButtonPress(int client, int button)
 {
 	if(b_IsMurderer[client] && button == IN_ATTACK2)
 	{
-		SetSpeed(client, 370.0);
+		SetSpeed(client, 400.0);
 	}
 }
 
@@ -443,7 +444,7 @@ public Action OnTakeDamage(int victim, int &attacker, int &inflictor, float &dam
 				if(b_IsMurderer[victim] == false && b_IsSheriff[victim] == false) {
 					if(damage > 125) {
 						ForcePlayerSuicide(attacker);
-						PrintCenterTextAll("The sheriff has killed an innocent and has been slayed...");
+						PrintCenterTextAll("The sheriff has killed an innocent and has been slain...");
 					}
 				}
 			}
@@ -704,6 +705,11 @@ public Action Event_PlayerSpawn(Event event, const char[] name, bool dontBroadca
 		if(!b_IsRoundActive) {
 			int iTotalTeamCount = GetTeamClientCount(TEAM_RED) + GetTeamClientCount(TEAM_BLUE);
 			if(iTotalTeamCount > 2) {
+				if(GetClientTeam(client) == TEAM_RED)
+				{
+					b_IsDead[client] = false;
+				}
+				
 				if(!b_gIsEnabled) {
 					if(b_HasSentMMReady == false) {
 						CPrintToChat(client, "%s 3 or more players found, starting Murder Mod.", MURDER_PREFIX);
@@ -872,10 +878,19 @@ public Action Event_PlayerDeath(Handle event, const char[] name, bool dontBroadc
 			if(GetClientTeam(client) == TEAM_RED) {
 				b_IsDead[client] = true;
 				TF2_ChangeClientTeam(client, TFTeam_Blue);
-				
-				if(GetTeamClientCount(TEAM_RED) < 2) { // To win, all innocent must be dead, including sheriff. So only 1 is alive, assumed to be the murderer.
-					ForceTeamWin(TEAM_RED);
+			}
+			
+			int AlivePlayers = 0;
+			for(int i = 0; i <= MaxClients; i++)
+			{
+				if(IsValidClient(i) && IsPlayerAlive(i) && !b_IsDead[i] && GetClientTeam(i) == TEAM_RED)
+				{
+					AlivePlayers++;
 				}
+			}
+			
+			if(AlivePlayers < 2) { // To win, all innocent must be dead, including sheriff. So only 1 is alive, assumed to be the murderer.
+				ForceTeamWin(TEAM_RED);
 			}
 		}
 	}
