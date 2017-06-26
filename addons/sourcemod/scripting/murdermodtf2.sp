@@ -93,6 +93,8 @@ public void OnPluginStart()
 	AddCommandListener(Hook_Suicide, "explode");
 	AddCommandListener(Hook_Suicide, "joinclass");
 	
+	AddCommandListener(Hook_Inspect, "+inspect");
+	
 	RegConsoleCmd("sm_mmhelp", Command_MMHelp, "Usage: sm_mmhelp");	
 	RegConsoleCmd("sm_newsheriff", Command_NewSheriff, "Usage: sm_newsheriff");	
 	RegConsoleCmd("sm_murdermusic", Command_MurderMusic, "Usage: sm_murdermusic");	
@@ -1092,6 +1094,18 @@ public Action Hook_CommandSay(int client, const char[] command, int argc)
 }
 
 public Action Hook_Suicide(int client, const char[] command, int argc)
+{
+	if (!b_gIsEnabled) return Plugin_Continue;
+	
+	if(IsValidClient(client)) {
+		CPrintToChat(client, "%s You are not allowed to do that.", MURDER_PREFIX);
+		return Plugin_Handled;
+	}
+	
+	return Plugin_Continue;
+}
+
+public Action Hook_Inspect(int client, const char[] command, int argc)
 {
 	if (!b_gIsEnabled) return Plugin_Continue;
 	
