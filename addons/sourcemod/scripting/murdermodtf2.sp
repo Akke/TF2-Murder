@@ -93,8 +93,6 @@ public void OnPluginStart()
 	AddCommandListener(Hook_Block, "explode");
 	AddCommandListener(Hook_Block, "joinclass");
 	
-	AddCommandListener(Hook_Block, "+inspect");
-	
 	RegConsoleCmd("sm_mmhelp", Command_MMHelp, "Usage: sm_mmhelp");	
 	RegConsoleCmd("sm_newsheriff", Command_NewSheriff, "Usage: sm_newsheriff");	
 	RegConsoleCmd("sm_murdermusic", Command_MurderMusic, "Usage: sm_murdermusic");	
@@ -1103,6 +1101,16 @@ public Action Hook_Block(int client, const char[] command, int argc)
 	}
 	
 	return Plugin_Continue;
+}
+
+public Action OnClientCommandKeyValues(int client, KeyValues kv)
+{
+    char szBuffer[64];
+    kv.GetSectionName(szBuffer, sizeof(szBuffer));
+    if (StrEqual(szBuffer, "+inspect_server", false))
+        return Plugin_Handled;
+    
+    return Plugin_Continue;
 }
 
 stock int SetWeaponInvis(int client, bool set = true) 
