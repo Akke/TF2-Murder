@@ -89,9 +89,9 @@ public void OnPluginStart()
 	HookEvent("player_death", Event_PlayerDeath, EventHookMode_Pre);
 	
 	AddCommandListener(Hook_CommandSay, "say");
-	AddCommandListener(Hook_Suicide, "kill");
-	AddCommandListener(Hook_Suicide, "explode");
-	AddCommandListener(Hook_Suicide, "joinclass");
+	AddCommandListener(Hook_Block, "kill");
+	AddCommandListener(Hook_Block, "explode");
+	AddCommandListener(Hook_Block, "joinclass");
 	
 	RegConsoleCmd("sm_mmhelp", Command_MMHelp, "Usage: sm_mmhelp");	
 	RegConsoleCmd("sm_newsheriff", Command_NewSheriff, "Usage: sm_newsheriff");	
@@ -1091,7 +1091,7 @@ public Action Hook_CommandSay(int client, const char[] command, int argc)
 	return Plugin_Continue;
 }
 
-public Action Hook_Suicide(int client, const char[] command, int argc)
+public Action Hook_Block(int client, const char[] command, int argc)
 {
 	if (!b_gIsEnabled) return Plugin_Continue;
 	
@@ -1101,6 +1101,16 @@ public Action Hook_Suicide(int client, const char[] command, int argc)
 	}
 	
 	return Plugin_Continue;
+}
+
+public Action OnClientCommandKeyValues(int client, KeyValues kv)
+{
+    char szBuffer[64];
+    kv.GetSectionName(szBuffer, sizeof(szBuffer));
+    if (StrEqual(szBuffer, "+inspect_server", false))
+        return Plugin_Handled;
+    
+    return Plugin_Continue;
 }
 
 stock int SetWeaponInvis(int client, bool set = true) 
