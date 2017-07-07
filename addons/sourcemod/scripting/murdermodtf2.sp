@@ -641,6 +641,8 @@ public Action Timer_Hud(Handle timer, int client)
 		if(!b_IsRoundActive)
 		{
 			ShowSyncHudText(client, hHudRole, "Round pending");
+			int iActiveWeapon = GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon");
+			SetEntProp(iActiveWeapon, Prop_Data, "m_iEntityQuality", 0);
 		} 
 		else if(b_IsMurderer[client] && !b_IsDead[client])
 		{
@@ -1096,6 +1098,19 @@ public Action Hook_Suicide(int client, const char[] command, int argc)
 	if (!b_gIsEnabled) return Plugin_Continue;
 	
 	if(IsValidClient(client)) {
+		CPrintToChat(client, "%s You are not allowed to do that.", MURDER_PREFIX);
+		return Plugin_Handled;
+	}
+	
+	return Plugin_Continue;
+}
+
+public Action Hook_Inspect(int client, const char[] command, int argc)
+{
+	if (!b_gIsEnabled) return Plugin_Continue;
+	
+	if(IsValidClient(client)) 
+	{
 		CPrintToChat(client, "%s You are not allowed to do that.", MURDER_PREFIX);
 		return Plugin_Handled;
 	}
