@@ -151,14 +151,9 @@ public void OnMapStart()
 
 public void OnEntityCreated(int entity, const char[] classname)
 {
-	if(entity > MaxClients && IsValidEntity(entity))
+	if (StrEqual(classname, "tf_logic_arena"))
 	{
-		int ent = 0; 
-		ent = MaxClients+1; 
-		while((ent = FindEntityByClassname(ent, "tf_logic_arena")) != -1) 
-		{
-			AcceptEntityInput(ent, "Kill");
-		}
+		AcceptEntityInput(entity, "Kill");
 	}
 }
 
